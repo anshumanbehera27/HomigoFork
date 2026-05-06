@@ -22,13 +22,14 @@ const stats = [
 
 export default function Dashboard({ onNavigate }: PageProps) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
-  const { userId } = useHomigoAuth();
+  const { userId, authReady } = useHomigoAuth();
 
   useEffect(() => {
+    if (!authReady) return;
     api.getDashboard(userId)
       .then((r) => setDashboard(r.data))
       .catch(() => setDashboard(null));
-  }, [userId]);
+  }, [userId, authReady]);
 
   const firstName = dashboard?.user?.full_name?.split(" ")[0] ?? "Julian";
   const matchCount = dashboard?.matches?.length ?? 12;

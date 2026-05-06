@@ -62,6 +62,8 @@ export default function App({ clerkEnabled = false }: AppProps) {
   const [page, setPage] = useState(initialPage);
   const [authUserId, setAuthUserId] = useState<string | number>(Number(import.meta.env.VITE_DEMO_USER_ID ?? 1));
   const [authUserProfile, setAuthUserProfile] = useState<{ fullName?: string | null; email?: string; phone?: string; imageUrl?: string } | undefined>();
+  // In demo mode (no Clerk) auth is always ready; in Clerk mode, wait for Clerk to load
+  const [authReady, setAuthReady] = useState(!clerkEnabled);
 
   const navigate = useCallback((nextPage: string) => {
     setPage(nextPage);
@@ -135,9 +137,9 @@ export default function App({ clerkEnabled = false }: AppProps) {
   const pageElement = renderPage();
 
   return (
-    <AuthProvider value={{ userId: authUserId, isClerkEnabled: clerkEnabled, userProfile: authUserProfile }}>
+    <AuthProvider value={{ userId: authUserId, isClerkEnabled: clerkEnabled, authReady, userProfile: authUserProfile }}>
       {topNavPages.has(page) && <TopNavBar onNavigate={navigate} />}
-      {clerkEnabled && <AuthBridge onNavigate={navigate} onUserIdChange={handleUserIdChange} onUserProfileChange={handleUserProfileChange} currentPage={page} />}
+      {clerkEnabled && <AuthBridge onNavigate={navigate} onUserIdChange={handleUserIdChange} onUserProfileChange={handleUserProfileChange} onAuthReady={() => setAuthReady(true)} currentPage={page} />}
       {publicPages.has(page) ? pageElement : <ProtectedRoute clerkEnabled={clerkEnabled} onNavigate={navigate}>{pageElement}</ProtectedRoute>}
     </AuthProvider>
   );

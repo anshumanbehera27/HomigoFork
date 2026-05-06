@@ -29,6 +29,23 @@ export type Property = {
   property_amenities?: Array<{ amenity: string }>;
 };
 
+export type PropertySearchResult = {
+  property_id: number;
+  title: string;
+  city: string | null;
+  cover_image: string | null;
+  price: number;
+  listing_type: string | null;
+  promotion_type: string | null;
+  property_type: string | null;
+  room_type: string | null;
+  owner: {
+    owner_id: number;
+    name: string | null;
+    is_verified: boolean;
+  };
+};
+
 export type User = {
   user_id: number;
   full_name: string;

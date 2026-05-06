@@ -11,6 +11,33 @@ function getClerkClient() {
 }
 
 async function upsertClerkUser(clerkId: string, payload: Record<string, unknown>) {
+  const email = payload.email as string;
+
+  // If a row with this email already exists (e.g. created via onboarding before
+  // Clerk login), update it rather than inserting — which would violate users_email_key.
+  const { data: existing } = await supabase
+    .from("users")
+    .select("user_id, profile_photo_id")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (existing) {
+    // Don't overwrite a custom Cloudinary photo with the Clerk avatar.
+    const updatePayload = { ...payload };
+    if (existing.profile_photo_id != null) {
+      delete updatePayload.profile_photo;
+    }
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({ clerk_id: clerkId, ...updatePayload })
+      .eq("user_id", existing.user_id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
   const { data, error } = await supabase
     .from("users")
     .upsert({ clerk_id: clerkId, ...payload }, { onConflict: "clerk_id" })
@@ -91,6 +118,8 @@ export async function handleClerkWebhook(req: Request, res: Response) {
       const fullName =
         [data.first_name, data.last_name].filter(Boolean).join(" ") || null;
 
+      // profile_photo is passed here but upsertClerkUser will drop it when the
+      // user already has a custom Cloudinary photo (profile_photo_id is set).
       await upsertClerkUser(data.id, {
         email,
         full_name: fullName,

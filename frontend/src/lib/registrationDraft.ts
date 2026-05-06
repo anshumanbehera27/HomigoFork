@@ -140,6 +140,7 @@ export type OwnerDraft = {
     monthly_rent: string;
     available_from: string;
     amenities: string[];
+    images: string[];
   };
 };
 
@@ -157,6 +158,7 @@ export const defaultOwnerDraft: OwnerDraft = {
     monthly_rent: "",
     available_from: "",
     amenities: [],
+    images: [],
   },
 };
 

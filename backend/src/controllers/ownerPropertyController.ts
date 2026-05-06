@@ -64,7 +64,7 @@ async function ensureUserByBasic(basic: { full_name?: string; email: string; pho
 async function saveUserProfilePhoto(userId: number, photoUrl: string) {
   const m = await supabase.from("media").insert({ url: photoUrl, type: "image", uploaded_by: userId }).select("media_id").single();
   if (m.error || !m.data) throw m.error ?? new Error("Unable to save profile photo");
-  const u = await supabase.from("users").update({ profile_photo_id: m.data.media_id, updated_at: new Date().toISOString() }).eq("user_id", userId);
+  const u = await supabase.from("users").update({ profile_photo_id: m.data.media_id, profile_photo: photoUrl, updated_at: new Date().toISOString() }).eq("user_id", userId);
   if (u.error) throw u.error;
 }
 
@@ -371,7 +371,7 @@ export async function getPropertyDetail(req: Request, res: Response, next: NextF
       .select(
         `
         *,
-        owner_profiles ( owner_id, business_name, kyc_status, is_verified, kyc_verified, users ( user_id, full_name, email, phone ) ),
+        owner_profiles ( owner_id, business_name, kyc_status, is_verified, kyc_verified, rating, total_properties, bio, users ( user_id, full_name, email, phone, profile_photo ) ),
         property_photos ( sort_order, caption, media ( url ) ),
         property_amenities ( amenity_catalog ( key, label ) )
       `,
@@ -441,6 +441,10 @@ export async function getPropertyDetail(req: Request, res: Response, next: NextF
           business_name: op?.business_name,
           is_verified: verified,
           kyc_status: op?.kyc_status ?? (verified ? "approved" : "pending"),
+          avatar: op?.users?.profile_photo ?? null,
+          bio: op?.bio ?? null,
+          rating: op?.rating ?? null,
+          total_properties: op?.total_properties ?? null,
         },
       },
     });

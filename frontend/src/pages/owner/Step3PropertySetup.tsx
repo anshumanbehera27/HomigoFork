@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import MaterialIcon from "../../components/ui/MaterialIcon";
 import ProgressStepper from "../../components/ui/ProgressStepper";
 import { readOwnerDraft, saveOwnerDraft } from "../../lib/registrationDraft";
+import { api } from "../../lib/api";
 
 type PageProps = { onNavigate: (page: string) => void };
 
@@ -22,6 +23,8 @@ export default function Step3PropertySetup({ onNavigate }: PageProps) {
   const [photos, setPhotos] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [errors, setErrors] = useState<{ title?: string; city?: string; monthlyRent?: string }>({});
 
   const addFiles = (files: FileList | null) => {
@@ -54,13 +57,36 @@ export default function Step3PropertySetup({ onNavigate }: PageProps) {
     return next;
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     const newErrors = validate();
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
     setErrors({});
+
+    // Upload selected photos to Cloudinary, then save URLs to draft
+    let imageUrls: string[] = readOwnerDraft().property.images ?? [];
+    if (photos.length > 0) {
+      setUploading(true);
+      setUploadProgress(0);
+      try {
+        const urls: string[] = [];
+        for (let i = 0; i < photos.length; i++) {
+          const url = await api.uploadImage(photos[i], "homigo/properties");
+          urls.push(url);
+          setUploadProgress(Math.round(((i + 1) / photos.length) * 100));
+        }
+        imageUrls = urls;
+      } catch {
+        setErrors((prev) => ({ ...prev, title: "Photo upload failed. Please try again." }));
+        setUploading(false);
+        return;
+      } finally {
+        setUploading(false);
+      }
+    }
+
     saveOwnerDraft({
       property: {
         title: title.trim(),
@@ -71,6 +97,7 @@ export default function Step3PropertySetup({ onNavigate }: PageProps) {
         monthly_rent: monthlyRent,
         available_from: availableFrom,
         amenities,
+        images: imageUrls,
       },
     });
     onNavigate("owner4");
@@ -230,16 +257,31 @@ export default function Step3PropertySetup({ onNavigate }: PageProps) {
             </div>
           )}
 
-          {photos.length > 0 && (
+          {photos.length > 0 && !uploading && (
             <p className="mt-3 text-xs text-on-surface-variant">
               {photos.length} photo{photos.length !== 1 ? "s" : ""} selected · First photo is used as cover
             </p>
           )}
+          {uploading && (
+            <div className="mt-3 space-y-1">
+              <div className="flex justify-between text-xs text-primary">
+                <span className="flex items-center gap-1">
+                  <MaterialIcon name="sync" className="animate-spin text-sm" /> Uploading photos…
+                </span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-container-highest">
+                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${uploadProgress}%` }} />
+              </div>
+            </div>
+          )}
         </section>
 
         <div className="flex justify-between">
-          <button type="button" onClick={() => onNavigate("owner2")} className="btn-tonal">Back</button>
-          <button type="button" onClick={handleContinue} className="btn-primary">Continue</button>
+          <button type="button" onClick={() => onNavigate("owner2")} className="btn-tonal" disabled={uploading}>Back</button>
+          <button type="button" onClick={handleContinue} className="btn-primary" disabled={uploading}>
+            {uploading ? "Uploading…" : "Continue"}
+          </button>
         </div>
       </form>
     </main>

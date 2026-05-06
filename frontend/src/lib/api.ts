@@ -1,4 +1,4 @@
-import type { ApiListResponse, ApiSingleResponse, Conversation, DashboardData, Message, Property, RoommateMatch, SeekerSearchResult } from "./types";
+import type { ApiListResponse, ApiSingleResponse, Conversation, DashboardData, Message, Property, PropertySearchResult, RoommateMatch, SeekerSearchResult } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000/api";
 let authTokenGetter: (() => Promise<string | null>) | null = null;
@@ -85,7 +85,7 @@ export const api = {
   },
 
   searchProperties(params: Record<string, string | number | undefined> = {}) {
-    return request<ApiListResponse<Property>>("/properties/search", {
+    return request<ApiListResponse<PropertySearchResult> & { total?: number }>("/properties/search", {
       method: "POST",
       body: JSON.stringify({
         filters: {
@@ -143,5 +143,31 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+
+  /**
+   * Upload an image file to Cloudinary via the backend.
+   * Returns the public HTTPS URL to store in Supabase.
+   *
+   * Usage:
+   *   const url = await api.uploadImage(file, "homigo/profiles");
+   *   // then pass url as profile_photo / cover_image / images[] in your form payload
+   */
+  async uploadImage(file: File, folder = "homigo"): Promise<string> {
+    const form = new FormData();
+    form.append("file", file);
+    const token = authTokenGetter ? await authTokenGetter() : null;
+    const response = await fetch(`${API_BASE_URL}/upload?folder=${encodeURIComponent(folder)}`, {
+      method: "POST",
+      // Do NOT set Content-Type — browser sets it with the boundary automatically
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error((payload as any).error ?? `Image upload failed with ${response.status}`);
+    }
+    const data = await response.json() as { url: string };
+    return data.url;
   },
 };

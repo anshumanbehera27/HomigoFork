@@ -15,6 +15,8 @@ import {
   listConversations,
   postMessageToConversation,
 } from "../controllers/chatController.js";
+import { uploadImage } from "../controllers/uploadController.js";
+import { uploadMiddleware } from "../middleware/upload.js";
 import { HttpError, sendError } from "../utils/http.js";
 
 type UserRow = {
@@ -222,6 +224,7 @@ async function fullUserProfile(identifier: string | number) {
 
   return {
     user_id: user.clerk_id ?? String(user.user_id),
+    numeric_user_id: user.user_id,
     basic_info: {
       full_name: user.full_name,
       email: user.email,
@@ -281,6 +284,9 @@ async function fullUserProfile(identifier: string | number) {
 export function createDomainRouter() {
   const router = Router();
 
+  // Image upload — accepts multipart/form-data { file }, returns { url }
+  router.post("/upload", uploadMiddleware.single("file"), uploadImage);
+
   router.post("/users", createUser);
   router.post("/users/profile", createOrUpdateUserProfile);
 
@@ -288,33 +294,36 @@ export function createDomainRouter() {
     try {
       const user = await resolveUser(req.params.userId);
       const [matches, saved, conversations, notifications, properties] = await Promise.all([
-        supabase.from("roommate_matches").select("*, matched_user:users!roommate_matches_matched_user_id_fkey(*)").or(`seeker_id.eq.${user.user_id},matched_user_id.eq.${user.user_id}`).limit(10),
+        supabase.from("match_requests").select("*").eq("seeker_id", user.user_id).limit(10).order("created_at", { ascending: false }),
         supabase.from("saved_items").select("*").eq("user_id", user.user_id).limit(10).order("saved_at", { ascending: false }),
         supabase.from("conversations").select("*").or(`user1_id.eq.${user.user_id},user2_id.eq.${user.user_id}`).limit(10).order("updated_at", { ascending: false }),
         supabase.from("notifications").select("*").eq("user_id", user.user_id).limit(10).order("created_at", { ascending: false }),
-        supabase.from("properties").select("*, property_images(*)").eq("status", "active").limit(6).order("created_at", { ascending: false }),
+        supabase.from("properties").select("*, property_photos(*)").eq("status", "active").limit(6).order("created_at", { ascending: false }),
       ]);
-      for (const result of [matches, saved, conversations, notifications, properties]) if (result.error) throw result.error;
+      for (const result of [matches, conversations, properties]) if (result.error) throw result.error;
+      // saved_items / notifications may not exist yet — treat missing table as empty list
+      const savedData = saved.error ? [] : (saved.data ?? []);
+      const notificationsData = notifications.error ? [] : (notifications.data ?? []);
       res.json({
         success: true,
         data: {
           user,
           matches: matches.data ?? [],
-          saved: saved.data ?? [],
+          saved: savedData,
           conversations: conversations.data ?? [],
-          notifications: notifications.data ?? [],
+          notifications: notificationsData,
           stats: {
             total_matches: matches.data?.length ?? 0,
             active_chats: conversations.data?.filter((item: any) => item.status === "active").length ?? 0,
-            saved_properties: saved.data?.filter((item: any) => item.item_type === "property").length ?? 0,
+            saved_properties: savedData.filter((item: any) => item.item_type === "property").length,
             profile_completion: 90,
           },
           recommended_roommates: matches.data ?? [],
           recommended_properties: properties.data ?? [],
-          recent_activity: notifications.data ?? [],
+          recent_activity: notificationsData,
           saved_items: {
-            roommates: saved.data?.filter((item: any) => item.item_type === "roommate") ?? [],
-            properties: saved.data?.filter((item: any) => item.item_type === "property") ?? [],
+            roommates: savedData.filter((item: any) => item.item_type === "roommate"),
+            properties: savedData.filter((item: any) => item.item_type === "property"),
           },
         },
       });
@@ -415,16 +424,18 @@ export function createDomainRouter() {
       const ownerId = await resolveOwnerId(req.params.ownerId);
       const owner = await supabase.from("owner_profiles").select("*, users(*)").eq("owner_id", ownerId).single();
       if (owner.error) throw owner.error;
-      const properties = await supabase.from("properties").select("*, property_images(*)").eq("owner_id", ownerId).order("created_at", { ascending: false });
+      const properties = await supabase.from("properties").select("*, property_photos(*)").eq("owner_id", ownerId).order("created_at", { ascending: false });
       if (properties.error) throw properties.error;
       const propertyIds = (properties.data ?? []).map((property: any) => property.property_id);
       const [inquiries, messages, notifications, analytics] = await Promise.all([
         propertyIds.length ? supabase.from("inquiries").select("*, users(*), properties(*)").in("property_id", propertyIds).order("created_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
         supabase.from("conversations").select("*").or(`user1_id.eq.${owner.data.user_id},user2_id.eq.${owner.data.user_id}`).limit(10).order("updated_at", { ascending: false }),
         supabase.from("notifications").select("*").eq("user_id", owner.data.user_id).limit(10).order("created_at", { ascending: false }),
-        propertyIds.length ? supabase.from("property_analytics").select("*").in("property_id", propertyIds).order("date", { ascending: true }) : Promise.resolve({ data: [], error: null }),
+        Promise.resolve({ data: [], error: null }),
       ]);
-      for (const result of [inquiries, messages, notifications, analytics]) if (result.error) throw result.error;
+      for (const result of [inquiries, messages]) if (result.error) throw result.error;
+      // notifications / analytics may not exist yet — treat as empty
+      const ownerNotifications = notifications.error ? [] : (notifications.data ?? []);
       const active = (properties.data ?? []).filter((property: any) => property.status === "active");
 
       res.json({
@@ -455,7 +466,7 @@ export function createDomainRouter() {
             available_rooms: property.available_rooms,
             views: property.total_views,
             inquiries: inquiries.data?.filter((inquiry: any) => inquiry.property_id === property.property_id).length ?? 0,
-            cover_image: property.cover_image ?? property.property_images?.[0]?.image_url,
+            cover_image: property.cover_image ?? null,
             created_at: property.created_at,
           })),
           recent_inquiries: (inquiries.data ?? []).slice(0, 10).map((inquiry: any) => ({
@@ -467,7 +478,7 @@ export function createDomainRouter() {
             status: inquiry.status,
           })),
           recent_messages: messages.data ?? [],
-          notifications: notifications.data ?? [],
+          notifications: ownerNotifications,
           analytics: {
             views_trend: (analytics.data ?? []).map((row: any) => ({ date: row.date, views: row.views })),
             inquiry_trend: (analytics.data ?? []).map((row: any) => ({ date: row.date, count: row.inquiries })),
@@ -492,7 +503,7 @@ export function createDomainRouter() {
   router.get("/properties/search", async (req, res) => {
     try {
       const limit = Math.min(Number(req.query.limit ?? 20), 100);
-      let query = supabase.from("properties").select("*, property_images(*), property_amenities(*)").eq("status", "active").limit(limit).order("created_at", { ascending: false });
+      let query = supabase.from("properties").select("*, property_photos(*), property_amenities(*)").eq("status", "active").limit(limit).order("created_at", { ascending: false });
 
       if (req.query.city) query = query.ilike("city", `%${String(req.query.city)}%`);
       if (req.query.property_type) query = query.eq("property_type", req.query.property_type);
@@ -597,26 +608,26 @@ export function createDomainRouter() {
 
   router.get("/users/:userId/dashboard", async (req, res) => {
     try {
-      const userId = Number(req.params.userId);
+      const { user_id: userId } = await resolveUser(req.params.userId);
       const [user, matches, saved, conversations, notifications] = await Promise.all([
         supabase.from("users").select("*").eq("user_id", userId).single(),
-        supabase.from("roommate_matches").select("*").or(`seeker_id.eq.${userId},matched_user_id.eq.${userId}`).limit(10).order("created_at", { ascending: false }),
+        supabase.from("match_requests").select("*").eq("seeker_id", userId).limit(10).order("created_at", { ascending: false }),
         supabase.from("saved_items").select("*").eq("user_id", userId).limit(10).order("saved_at", { ascending: false }),
         supabase.from("conversations").select("*").or(`user1_id.eq.${userId},user2_id.eq.${userId}`).limit(10).order("updated_at", { ascending: false }),
         supabase.from("notifications").select("*").eq("user_id", userId).eq("is_read", false).limit(10).order("created_at", { ascending: false }),
       ]);
 
-      for (const result of [user, matches, saved, conversations, notifications]) {
+      for (const result of [user, matches, conversations]) {
         if (result.error) throw result.error;
       }
 
       res.json({
         data: {
           user: user.data,
-          matches: matches.data,
-          saved: saved.data,
-          conversations: conversations.data,
-          notifications: notifications.data,
+          matches: matches.data ?? [],
+          saved: saved.error ? [] : (saved.data ?? []),
+          conversations: conversations.data ?? [],
+          notifications: notifications.error ? [] : (notifications.data ?? []),
         },
       });
     } catch (error) {
@@ -626,12 +637,12 @@ export function createDomainRouter() {
 
   router.get("/users/:userId/matches", async (req, res) => {
     try {
-      const userId = Number(req.params.userId);
+      const { user_id: userId } = await resolveUser(req.params.userId);
       const { data, error } = await supabase
-        .from("roommate_matches")
-        .select("*, matched_user:users!roommate_matches_matched_user_id_fkey(*)")
-        .or(`seeker_id.eq.${userId},matched_user_id.eq.${userId}`)
-        .order("compatibility", { ascending: false });
+        .from("match_requests")
+        .select("*")
+        .eq("seeker_id", userId)
+        .order("compatibility_score", { ascending: false });
       if (error) throw error;
       res.json({ data });
     } catch (error) {
@@ -641,7 +652,8 @@ export function createDomainRouter() {
 
   router.get("/users/:userId/saved", async (req, res) => {
     try {
-      const { data, error } = await supabase.from("saved_items").select("*").eq("user_id", Number(req.params.userId)).order("saved_at", { ascending: false });
+      const { user_id: userId } = await resolveUser(req.params.userId);
+      const { data, error } = await supabase.from("saved_items").select("*").eq("user_id", userId).order("saved_at", { ascending: false });
       if (error) throw error;
       res.json({ data });
     } catch (error) {
@@ -651,7 +663,8 @@ export function createDomainRouter() {
 
   router.post("/users/:userId/saved", async (req, res) => {
     try {
-      const { data, error } = await supabase.from("saved_items").insert({ ...req.body, user_id: Number(req.params.userId) }).select("*").single();
+      const { user_id: userId } = await resolveUser(req.params.userId);
+      const { data, error } = await supabase.from("saved_items").insert({ ...req.body, user_id: userId }).select("*").single();
       if (error) throw error;
       res.status(201).json({ data });
     } catch (error) {
@@ -661,7 +674,8 @@ export function createDomainRouter() {
 
   router.delete("/users/:userId/saved/:savedId", async (req, res) => {
     try {
-      const { error } = await supabase.from("saved_items").delete().eq("user_id", Number(req.params.userId)).eq("id", Number(req.params.savedId));
+      const { user_id: userId } = await resolveUser(req.params.userId);
+      const { error } = await supabase.from("saved_items").delete().eq("user_id", userId).eq("id", Number(req.params.savedId));
       if (error) throw error;
       res.status(204).send();
     } catch (error) {

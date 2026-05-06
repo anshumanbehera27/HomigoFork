@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import ProgressStepper from "../../components/ui/ProgressStepper";
 import MaterialIcon from "../../components/ui/MaterialIcon";
 import { readOwnerDraft, saveOwnerDraft } from "../../lib/registrationDraft";
+import { api } from "../../lib/api";
 
 type PageProps = { onNavigate: (page: string) => void };
 
@@ -12,20 +13,32 @@ export default function Step2Profile({ onNavigate }: PageProps) {
   const [bio, setBio] = useState(draft.owner_profile.bio);
   const [ownerType, setOwnerType] = useState<"individual" | "company">(draft.owner_profile.owner_type);
   const [photo, setPhoto] = useState<string | undefined>(draft.basic_info.profile_photo);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleFile = (file?: File) => {
+  const handleFile = async (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result);
-      setPhoto(value);
-    };
-    reader.readAsDataURL(file);
+    setUploading(true);
+    setUploadError(null);
+    // Show a local object URL as preview immediately while the upload runs
+    const localPreview = URL.createObjectURL(file);
+    setPhoto(localPreview);
+    try {
+      const cloudinaryUrl = await api.uploadImage(file, "homigo/profiles");
+      setPhoto(cloudinaryUrl);
+      // Persist the Cloudinary URL into the draft right away so it survives navigation
+      saveOwnerDraft({ basic_info: { ...readOwnerDraft().basic_info, profile_photo: cloudinaryUrl } });
+    } catch {
+      setUploadError("Upload failed — please try again.");
+      setPhoto(draft.basic_info.profile_photo); // revert to previous
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleContinue = () => {
     saveOwnerDraft({
-      basic_info: { ...draft.basic_info, profile_photo: photo },
+      basic_info: { ...readOwnerDraft().basic_info, profile_photo: photo },
       owner_profile: { ...draft.owner_profile, bio: bio.trim(), owner_type: ownerType },
     });
     onNavigate("owner3");
@@ -47,17 +60,27 @@ export default function Step2Profile({ onNavigate }: PageProps) {
 
           {/* Profile photo */}
           <div
-            onClick={() => inputRef.current?.click()}
+            onClick={() => !uploading && inputRef.current?.click()}
             onDrop={(e) => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }}
             onDragOver={(e) => e.preventDefault()}
-            className="group flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-outline-variant bg-surface-container-low p-8 text-center transition-colors hover:border-primary"
+            className={`group flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed bg-surface-container-low p-8 text-center transition-colors ${uploading ? "cursor-not-allowed border-outline-variant opacity-60" : "border-outline-variant hover:border-primary"}`}
           >
             {photo ? (
-              <img src={photo} alt="Profile" className="mb-3 h-20 w-20 rounded-full object-cover" />
+              <div className="relative mb-3">
+                <img src={photo} alt="Profile" className="h-20 w-20 rounded-full object-cover" />
+                {uploading && (
+                  <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40">
+                    <MaterialIcon name="sync" className="animate-spin text-xl text-white" />
+                  </div>
+                )}
+              </div>
             ) : (
-              <MaterialIcon name="cloud_upload" className="mb-3 text-5xl text-primary" />
+              <MaterialIcon name={uploading ? "sync" : "cloud_upload"} className={`mb-3 text-5xl text-primary ${uploading ? "animate-spin" : ""}`} />
             )}
-            <p className="text-sm font-semibold">{photo ? "Click to change photo" : "Click to upload or drag and drop"}</p>
+            <p className="text-sm font-semibold">
+              {uploading ? "Uploading to Cloudinary…" : photo ? "Click to change photo" : "Click to upload or drag and drop"}
+            </p>
+            {uploadError && <p className="mt-2 text-xs font-semibold text-error">{uploadError}</p>}
           </div>
           <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
 
@@ -91,8 +114,10 @@ export default function Step2Profile({ onNavigate }: PageProps) {
           </label>
 
           <div className="flex justify-between">
-            <button type="button" onClick={() => onNavigate("owner1")} className="btn-tonal">Back</button>
-            <button type="button" onClick={handleContinue} className="btn-primary">Continue</button>
+            <button type="button" onClick={() => onNavigate("owner1")} className="btn-tonal" disabled={uploading}>Back</button>
+            <button type="button" onClick={handleContinue} className="btn-primary" disabled={uploading}>
+              {uploading ? "Uploading…" : "Continue"}
+            </button>
           </div>
         </form>
 

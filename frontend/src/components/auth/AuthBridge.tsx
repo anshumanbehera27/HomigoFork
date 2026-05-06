@@ -9,12 +9,13 @@ type AuthBridgeProps = {
   onUserProfileChange: (
     profile: { fullName?: string | null; email?: string; phone?: string; imageUrl?: string } | null,
   ) => void;
+  onAuthReady: () => void;
   currentPage: string;
 };
 
 const PUBLIC_PAGES = new Set(["landing", "login"]);
 
-export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileChange, currentPage }: AuthBridgeProps) {
+export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileChange, onAuthReady, currentPage }: AuthBridgeProps) {
   const { getToken, isSignedIn } = useAuth();
   const { user, isLoaded } = useUser();
   // Prevents duplicate sign-in processing across re-renders
@@ -29,6 +30,7 @@ export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileCh
   // Keep app auth context in sync with Clerk state
   useEffect(() => {
     if (!isLoaded) return;
+    onAuthReady();
     if (isSignedIn && user) {
       onUserIdChange(user.id);
       onUserProfileChange({
@@ -77,6 +79,11 @@ export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileCh
       // Determine destination: returning users (role set) → dashboard; new users → role selection
       try {
         const result = await api.getUserDetails(resolvedUserId) as any;
+        // If sync failed, recover the stable numeric Supabase user_id from the profile response
+        if (result?.data?.numeric_user_id && resolvedUserId === user.id) {
+          resolvedUserId = result.data.numeric_user_id;
+          onUserIdChange(resolvedUserId);
+        }
         const role = result?.data?.basic_info?.role;
         if (role === "seeker" || role === "owner") {
           markOnboardingComplete(role);

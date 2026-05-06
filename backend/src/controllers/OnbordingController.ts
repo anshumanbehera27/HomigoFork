@@ -91,7 +91,7 @@ async function saveProfilePhoto(userId: number, profilePhotoUrl: string | undefi
 
   const userUpdate = await supabase
     .from("users")
-    .update({ profile_photo_id: mediaInsert.data.media_id, updated_at: new Date().toISOString() })
+    .update({ profile_photo_id: mediaInsert.data.media_id, profile_photo: profilePhotoUrl, updated_at: new Date().toISOString() })
     .eq("user_id", userId);
   if (userUpdate.error) throw userUpdate.error;
 }

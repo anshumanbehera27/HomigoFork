@@ -95,6 +95,10 @@ export default function Step4KYC({ onNavigate }: PageProps) {
 
   const submitKyc = async () => {
     if (loading) return;
+    if (!addressProofFile) {
+      setStatus({ type: "error", message: "Address proof document is required." });
+      return;
+    }
     setLoading(true);
     setStatus(null);
 
@@ -104,7 +108,6 @@ export default function Step4KYC({ onNavigate }: PageProps) {
     const amenityKeys = property.amenities.map((label) =>
       label.toLowerCase().replace(/-/g, "_").replace(/\s+/g, "_"),
     );
-
     const roomTypeMap: Record<string, string> = {
       private_room: "private",
       shared_room: "shared",
@@ -114,6 +117,13 @@ export default function Step4KYC({ onNavigate }: PageProps) {
     const hasRoom = Boolean(property.city || property.title);
 
     try {
+      // 1. Upload KYC documents to Cloudinary
+      const [govIdUrl, addrProofUrl] = await Promise.all([
+        governmentIdFile ? api.uploadImage(governmentIdFile, "homigo/kyc") : Promise.resolve(null),
+        api.uploadImage(addressProofFile, "homigo/kyc"),
+      ]);
+
+      // 2. Save user + seeker/owner profile + property with images from draft
       await api.saveUserProfile({
         user_id: userId,
         basic_info: {
@@ -132,12 +142,38 @@ export default function Step4KYC({ onNavigate }: PageProps) {
               rent: property.monthly_rent ? Number(property.monthly_rent) : null,
               vacancy: 1,
               description: property.title || null,
-              room_images: [],
+              room_images: property.images ?? [],
               amenities: amenityKeys,
               room_preferences: { preferred_gender: "any" },
             }
           : { has_room: false },
       });
+
+      // 3. Submit KYC verification documents
+      await api.saveOwnerProfile({
+        basic_info: {
+          name: draft.basic_info.full_name || userProfile?.fullName || null,
+          email: draft.basic_info.email || userProfile?.email,
+          phone: draft.basic_info.phone || userProfile?.phone || null,
+        },
+        owner_profile: {
+          business_name: draft.owner_profile.business_name || null,
+          owner_type: draft.owner_profile.owner_type,
+          bio: draft.owner_profile.bio || null,
+        },
+        verification_details: {
+          government_id: {
+            id_type: governmentIdType,
+            id_number: governmentIdNumber || null,
+            document_images: govIdUrl ? [govIdUrl] : [],
+          },
+          address_proof: {
+            document_type: addressProofType,
+            document_image: addrProofUrl,
+          },
+        },
+      });
+
       setStatus({ type: "success", message: "Verification submitted successfully!" });
       onNavigate("owner5");
     } catch (error) {

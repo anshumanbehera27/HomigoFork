@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import MaterialIcon from "../../components/ui/MaterialIcon";
 import RegistrationShell from "../../components/ui/RegistrationShell";
 import { readRegistrationDraft, saveRegistrationDraft } from "../../lib/registrationDraft";
+import { api } from "../../lib/api";
 
 type PageProps = { onNavigate: (page: string) => void };
 
@@ -10,16 +11,26 @@ const previewPhoto = "https://lh3.googleusercontent.com/aida-public/AB6AXuBG7mMY
 export default function Step2PhotoUpload({ onNavigate }: PageProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [photo, setPhoto] = useState(readRegistrationDraft().basic_info.profile_photo ?? previewPhoto);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const handleFile = (file?: File) => {
+  const handleFile = async (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result);
-      setPhoto(value);
-      saveRegistrationDraft({ basic_info: { ...readRegistrationDraft().basic_info, profile_photo: value } });
-    };
-    reader.readAsDataURL(file);
+    setUploading(true);
+    setUploadError(null);
+    // Show local preview immediately while uploading
+    const localUrl = URL.createObjectURL(file);
+    setPhoto(localUrl);
+    try {
+      const cloudinaryUrl = await api.uploadImage(file, "homigo/profiles");
+      setPhoto(cloudinaryUrl);
+      saveRegistrationDraft({ basic_info: { ...readRegistrationDraft().basic_info, profile_photo: cloudinaryUrl } });
+    } catch {
+      setUploadError("Upload failed. Please try again.");
+      setPhoto(previewPhoto);
+    } finally {
+      setUploading(false);
+    }
   };
 
   const saveAndContinue = () => {
@@ -28,7 +39,7 @@ export default function Step2PhotoUpload({ onNavigate }: PageProps) {
   };
 
   return (
-    <RegistrationShell currentStep={2} sideTimeline onBack={() => onNavigate("onboarding1")} onContinue={saveAndContinue}>
+    <RegistrationShell currentStep={2} sideTimeline onBack={() => onNavigate("onboarding1")} onContinue={saveAndContinue} loading={uploading}>
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-10 text-center">
           <div className="mb-4 flex items-center justify-center gap-3 lg:hidden">
@@ -52,6 +63,12 @@ export default function Step2PhotoUpload({ onNavigate }: PageProps) {
               <span className="rounded-full bg-surface-container-high px-6 py-2 text-sm font-semibold text-on-surface">Upload Photo</span>
             </button>
             <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(event) => handleFile(event.target.files?.[0])} />
+            {uploading && (
+              <p className="mt-3 flex items-center justify-center gap-2 text-xs text-primary">
+                <MaterialIcon name="sync" className="animate-spin text-sm" /> Uploading…
+              </p>
+            )}
+            {uploadError && <p className="mt-2 text-xs font-semibold text-error">{uploadError}</p>}
           </div>
           <div className="relative overflow-hidden rounded-xl bg-surface-container-lowest p-8">
             <div className="mb-6 flex items-center gap-2">
