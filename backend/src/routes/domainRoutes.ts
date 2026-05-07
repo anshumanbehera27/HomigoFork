@@ -175,6 +175,100 @@ async function latestPropertySnapshotByUserIds(userIds: number[]): Promise<Map<n
   return map;
 }
 
+type InterestedProperty = {
+  property_id: number;
+  title: string | null;
+  city: string | null;
+  rent: number | null;
+  cover_image: string | null;
+};
+
+async function fetchInterestedPropertyByUserIds(userIds: number[]): Promise<Map<number, InterestedProperty>> {
+  const map = new Map<number, InterestedProperty>();
+  if (!userIds.length) return map;
+
+  // Use inquiries as the signal of interest; fall back silently if table missing
+  const { data: inquiries, error } = await supabase
+    .from("inquiries")
+    .select("user_id, property_id, created_at")
+    .in("user_id", userIds)
+    .order("created_at", { ascending: false });
+
+  if (error || !inquiries?.length) return map;
+
+  // Keep only the most-recent inquiry per user
+  const userToPropId = new Map<number, number>();
+  for (const row of inquiries) {
+    if (!userToPropId.has(row.user_id)) {
+      userToPropId.set(row.user_id, row.property_id);
+    }
+  }
+
+  const propIds = [...new Set(userToPropId.values())];
+  if (!propIds.length) return map;
+
+  const { data: props, error: propErr } = await supabase
+    .from("properties")
+    .select("property_id, title, city, rent, monthly_rent, cover_image")
+    .in("property_id", propIds);
+  if (propErr || !props?.length) return map;
+
+  const propById = new Map<number, any>((props as any[]).map((p) => [p.property_id, p]));
+
+  for (const [userId, propId] of userToPropId.entries()) {
+    const p = propById.get(propId);
+    if (!p) continue;
+    map.set(userId, {
+      property_id: p.property_id,
+      title: p.title ?? null,
+      city: p.city ?? null,
+      rent: p.monthly_rent ?? p.rent ?? null,
+      cover_image: p.cover_image ?? null,
+    });
+  }
+
+  return map;
+}
+
+async function fetchSavedPropertiesByUserIds(userIds: number[]): Promise<Map<number, InterestedProperty[]>> {
+  const map = new Map<number, InterestedProperty[]>();
+  if (!userIds.length) return map;
+
+  const { data: savedRows, error } = await supabase
+    .from("saved_items")
+    .select("user_id, property_id")
+    .in("user_id", userIds)
+    .eq("item_type", "property")
+    .not("property_id", "is", null)
+    .order("saved_at", { ascending: false });
+
+  if (error || !savedRows?.length) return map;
+
+  const propIds = [...new Set((savedRows as any[]).map((r) => r.property_id))];
+  const { data: props, error: propErr } = await supabase
+    .from("properties")
+    .select("property_id, title, city, rent, monthly_rent, cover_image")
+    .in("property_id", propIds);
+  if (propErr || !props?.length) return map;
+
+  const propById = new Map<number, any>((props as any[]).map((p) => [p.property_id, p]));
+
+  for (const row of savedRows as any[]) {
+    const p = propById.get(row.property_id);
+    if (!p) continue;
+    const entry: InterestedProperty = {
+      property_id: p.property_id,
+      title: p.title ?? null,
+      city: p.city ?? null,
+      rent: p.monthly_rent ?? p.rent ?? null,
+      cover_image: p.cover_image ?? null,
+    };
+    if (!map.has(row.user_id)) map.set(row.user_id, []);
+    map.get(row.user_id)!.push(entry);
+  }
+  return map;
+}
+
 async function resolveOwnerId(identifier: string | number): Promise<number> {
   if (numeric(identifier)) {
     const owner = await supabase.from("owner_profiles").select("owner_id").eq("owner_id", Number(identifier)).maybeSingle();
@@ -213,14 +307,17 @@ async function fullUserProfile(identifier: string | number) {
   const seekerData = seeker.data as any;
   const ownerData = owner.data as any;
 
-  const [profilePhotoUrl, lifestyleMap, roommateRow, propertyRow] = await Promise.all([
+  const [profilePhotoUrl, lifestyleMap, roommateRow, propertyRow, savedPropsMap] = await Promise.all([
     resolveProfilePhotoUrl(user),
     seekerData?.seeker_id ? loadLifestyleMap(seekerData.seeker_id) : Promise.resolve({} as Record<string, string | number>),
     seekerData?.seeker_id ? loadRoommatePreferencesRow(seekerData.seeker_id) : Promise.resolve(null),
     fetchLatestPropertyForUser(user.user_id),
+    fetchSavedPropertiesByUserIds([user.user_id]),
   ]);
 
   const current_room_details = mapPropertyToCurrentRoomDetails(propertyRow);
+  const interestedProperties = savedPropsMap.get(user.user_id) ?? [];
+  const interestedProperty = interestedProperties[0] ?? null;
 
   return {
     user_id: user.clerk_id ?? String(user.user_id),
@@ -275,6 +372,9 @@ async function fullUserProfile(identifier: string | number) {
         }
       : null,
     current_room_details,
+    propertyId: interestedProperty ? String(interestedProperty.property_id) : null,
+    interestedProperty: interestedProperty ?? null,
+    interestedProperties,
     stats: { profile_completion: 90, total_matches: matchCount.count ?? 0, active_chats: chatCount.count ?? 0 },
     compatibility_score: 87,
     timestamps: { created_at: user.created_at, updated_at: user.updated_at },
@@ -377,7 +477,10 @@ export function createDomainRouter() {
       const from = (page - 1) * limit;
       const to = from + limit - 1;
 
-      let query = supabase.from("seeker_profiles").select("*, users(*), seeker_preferred_locations(*)", { count: "exact" }).range(from, to);
+      let query = supabase
+        .from("seeker_profiles")
+        .select("*, users(*), seeker_preferred_locations(*), lifestyles(*), roommate_preferences(*)", { count: "exact" })
+        .range(from, to);
       if (filters.gender) query = query.eq("gender", filters.gender);
       if (filters.age_range?.min) query = query.gte("age", filters.age_range.min);
       if (filters.age_range?.max) query = query.lte("age", filters.age_range.max);
@@ -387,26 +490,70 @@ export function createDomainRouter() {
       const { data, error, count } = await query;
       if (error) throw error;
       const userIds = (data ?? []).map((item: any) => item.user_id);
-      const roomByUser = await latestPropertySnapshotByUserIds(userIds);
+
+      // Run room snapshot and interested-property lookup in parallel
+      const [roomByUser, interestedPropByUser] = await Promise.all([
+        latestPropertySnapshotByUserIds(userIds),
+        fetchInterestedPropertyByUserIds(userIds),
+      ]);
 
       const rows = (data ?? [])
-        .filter((item: any) => !filters.location || item.seeker_preferred_locations?.some((location: any) => String(location.location_name).toLowerCase().includes(String(filters.location).toLowerCase())))
+        .filter((item: any) => !filters.location || item.seeker_preferred_locations?.some((l: any) => String(l.location_name).toLowerCase().includes(String(filters.location).toLowerCase())))
         .filter((item: any) => filters.room_filters?.has_room === undefined || Boolean(roomByUser.get(item.user_id)?.has_room) === filters.room_filters.has_room)
         .filter((item: any) => !filters.budget?.min || Number(roomByUser.get(item.user_id)?.rent ?? 0) >= Number(filters.budget.min))
         .filter((item: any) => !filters.budget?.max || Number(roomByUser.get(item.user_id)?.rent ?? 0) <= Number(filters.budget.max))
         .map((item: any) => {
           const room = roomByUser.get(item.user_id);
+
+          // Build lifestyle map from the joined lifestyles rows
+          const lifestyleArr: Array<{ lifestyle_key: string; details: string }> = item.lifestyles ?? [];
+          const lm: Record<string, string> = Object.fromEntries(lifestyleArr.map((l) => [l.lifestyle_key, String(l.details ?? "")]));
+
+          // roommate_preferences is a one-to-many but effectively one row per seeker
+          const rpArr: any[] = item.roommate_preferences ?? [];
+          const rp = rpArr[0] ?? null;
+
+          const locs: string[] = (item.seeker_preferred_locations ?? []).map((l: any) => l.location_name).filter(Boolean);
+
+          const smokingRaw = (lm.smoking ?? "").toLowerCase();
+          const drinkingRaw = (lm.drinking ?? "").toLowerCase();
+          const smoking = smokingRaw === "yes" || smokingRaw === "occasionally";
+          const drinking = drinkingRaw === "yes" || drinkingRaw === "occasionally";
+          const validSchedules = ["early_bird", "night_owl", "flexible"];
+          const schedule = validSchedules.includes(lm.sleep_schedule) ? lm.sleep_schedule : "flexible";
+          const cleanNum = Number(lm.cleanliness ?? "3");
+          const cleanliness = cleanNum >= 4 ? "high" : cleanNum >= 2 ? "medium" : "relaxed";
+
+          const preferences: string[] = [];
+          if (!smoking) preferences.push("Non-smoker");
+          if (!drinking) preferences.push("Non-drinker");
+          if (rp?.allow_pets) preferences.push("Pet-friendly");
+          if (rp?.preferred_gender && rp.preferred_gender !== "any") preferences.push(`Prefers ${rp.preferred_gender}`);
+
+          const preferredGender = ["male", "female", "any"].includes(rp?.preferred_gender) ? rp.preferred_gender : "any";
+          const gender = item.gender === "male" ? "male" : "female";
+
+          const interestedProperty = interestedPropByUser.get(item.user_id) ?? null;
+
           return {
-            user_id: item.users?.clerk_id ?? item.user_id,
-            name: item.users?.full_name,
-            age: item.age,
-            gender: item.gender,
-            occupation: item.occupation,
-            location: room?.location ?? item.seeker_preferred_locations?.[0]?.location_name,
-            budget: room?.rent,
-            profile_image: item.users?.profile_photo,
-            lifestyle: { smoking: item.smoking, drinking: item.drinking, sleep: item.sleep_schedule, cleanliness: item.cleanliness },
-            compatibility: Math.min(98, 70 + Number(item.cleanliness ?? 3) * 4),
+            id: String(item.users?.clerk_id ?? item.user_id),
+            name: item.users?.full_name ?? "Unknown",
+            age: item.age ?? 25,
+            gender,
+            city: room?.location ?? locs[0] ?? "",
+            occupation: item.occupation ?? "",
+            company: "",
+            bio: item.bio ?? "",
+            compatibility: Math.min(98, 70 + cleanNum * 4),
+            budget: room?.rent ?? 0,
+            lifestyle: { smoking, drinking, pets: rp?.allow_pets ?? false, schedule, cleanliness },
+            preferences,
+            preferredGender,
+            languages: [],
+            avatar: item.users?.profile_photo ?? "",
+            lookingIn: locs,
+            propertyId: interestedProperty ? String(interestedProperty.property_id) : undefined,
+            interestedProperty: interestedProperty ?? undefined,
           };
         })
         .sort((a: any, b: any) => sort.by === "compatibility" && sort.order !== "asc" ? b.compatibility - a.compatibility : 0);
@@ -645,6 +792,16 @@ export function createDomainRouter() {
         .order("compatibility_score", { ascending: false });
       if (error) throw error;
       res.json({ data });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  router.get("/users/:userId/saved/properties", async (req, res) => {
+    try {
+      const { user_id: userId } = await resolveUser(req.params.userId);
+      const savedPropsMap = await fetchSavedPropertiesByUserIds([userId]);
+      res.json({ data: savedPropsMap.get(userId) ?? [] });
     } catch (error) {
       sendError(res, error);
     }

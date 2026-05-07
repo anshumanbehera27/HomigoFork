@@ -33,7 +33,7 @@ export default function Step3Preferences({ onNavigate }: PageProps) {
         ...draft.basic_info,
         full_name: userProfile?.fullName ?? draft.basic_info.full_name,
         email: userProfile?.email ?? draft.basic_info.email,
-        profile_photo: userProfile?.imageUrl ?? draft.basic_info.profile_photo,
+        profile_photo: draft.basic_info.profile_photo ?? userProfile?.imageUrl,
       },
       seeker_profile: {
         ...draft.seeker_profile,

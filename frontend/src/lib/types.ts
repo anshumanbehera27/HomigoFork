@@ -99,20 +99,42 @@ export type DashboardData = {
   recommended_properties?: Property[];
 };
 
-export type SeekerSearchResult = {
-  user_id: string | number;
-  name?: string | null;
-  age?: number | null;
-  gender?: string | null;
-  occupation?: string | null;
-  location?: string | null;
-  budget?: number | null;
-  profile_image?: string | null;
-  lifestyle?: {
-    smoking?: unknown;
-    drinking?: unknown;
-    sleep?: unknown;
-    cleanliness?: unknown;
-  };
+export type RoommateProfile = {
+  id: string;
+  name: string;
+  age: number;
+  gender: "male" | "female";
+  city: string;
+  occupation: string;
+  company: string;
+  bio: string;
   compatibility: number;
+  budget: number;
+  lifestyle: {
+    smoking: boolean;
+    drinking: boolean;
+    pets: boolean;
+    schedule: "early_bird" | "night_owl" | "flexible";
+    cleanliness: "high" | "medium" | "relaxed";
+  };
+  preferences: string[];
+  preferredGender: "male" | "female" | "any";
+  languages: string[];
+  avatar: string;
+  lookingIn: string[];
+  propertyId?: string;
+  interestedProperty?: {
+    property_id: number;
+    title: string | null;
+    city: string | null;
+    rent: number | null;
+    cover_image: string | null;
+  };
+  interestedProperties?: Array<{
+    property_id: number;
+    title: string | null;
+    city: string | null;
+    rent: number | null;
+    cover_image: string | null;
+  }>;
 };

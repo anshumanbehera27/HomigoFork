@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import MaterialIcon from "../../components/ui/MaterialIcon";
 import RegistrationShell from "../../components/ui/RegistrationShell";
+import { useHomigoAuth } from "../../components/auth/AuthContext";
 import { readRegistrationDraft, saveRegistrationDraft } from "../../lib/registrationDraft";
 import { api } from "../../lib/api";
 
@@ -10,6 +11,7 @@ const previewPhoto = "https://lh3.googleusercontent.com/aida-public/AB6AXuBG7mMY
 
 export default function Step2PhotoUpload({ onNavigate }: PageProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const { userId } = useHomigoAuth();
   const [photo, setPhoto] = useState(readRegistrationDraft().basic_info.profile_photo ?? previewPhoto);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -22,9 +24,23 @@ export default function Step2PhotoUpload({ onNavigate }: PageProps) {
     const localUrl = URL.createObjectURL(file);
     setPhoto(localUrl);
     try {
+      // Step 1: Upload to Cloudinary, get HTTPS URL back
       const cloudinaryUrl = await api.uploadImage(file, "homigo/profiles");
       setPhoto(cloudinaryUrl);
-      saveRegistrationDraft({ basic_info: { ...readRegistrationDraft().basic_info, profile_photo: cloudinaryUrl } });
+
+      // Step 2: Persist URL to Supabase immediately (media table + users.profile_photo)
+      const draft = readRegistrationDraft();
+      const updatedDraft = saveRegistrationDraft({
+        basic_info: { ...draft.basic_info, profile_photo: cloudinaryUrl },
+      });
+      await api.saveUserProfile({
+        user_id: userId,
+        basic_info: {
+          email: updatedDraft.basic_info.email,
+          full_name: updatedDraft.basic_info.full_name,
+          profile_photo: cloudinaryUrl,
+        },
+      });
     } catch {
       setUploadError("Upload failed. Please try again.");
       setPhoto(previewPhoto);

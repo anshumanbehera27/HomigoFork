@@ -1,4 +1,4 @@
-import type { ApiListResponse, ApiSingleResponse, Conversation, DashboardData, Message, Property, PropertySearchResult, RoommateMatch, SeekerSearchResult } from "./types";
+import type { ApiListResponse, ApiSingleResponse, Conversation, DashboardData, Message, Property, PropertySearchResult, RoommateMatch, RoommateProfile } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000/api";
 let authTokenGetter: (() => Promise<string | null>) | null = null;
@@ -45,14 +45,14 @@ export const api = {
   },
 
   searchUsers(payload: unknown) {
-    return request<ApiListResponse<SeekerSearchResult>>("/users/search", {
+    return request<ApiListResponse<RoommateProfile>>("/users/search", {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
 
   getRecommendedRoommates(limit = 3) {
-    return request<ApiListResponse<SeekerSearchResult>>("/users/search", {
+    return request<ApiListResponse<RoommateProfile>>("/users/search", {
       method: "POST",
       body: JSON.stringify({
         filters: {},
@@ -143,6 +143,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+
+  getSavedItems(userId: string | number) {
+    return request<{ data: Array<{ id: number; user_id: number; item_type: string; property_id: number | null; saved_at: string }> }>(`/users/${userId}/saved`);
+  },
+
+  addSavedItem(userId: string | number, payload: { item_type: string; property_id?: number }) {
+    return request<{ data: { id: number; user_id: number; item_type: string; property_id: number | null; saved_at: string } }>(`/users/${userId}/saved`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  removeSavedItem(userId: string | number, savedId: number) {
+    return request<undefined>(`/users/${userId}/saved/${savedId}`, { method: "DELETE" });
   },
 
   /**

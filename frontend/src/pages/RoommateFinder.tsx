@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import BottomNavBar from "../components/layout/BottomNavBar";
 import MaterialIcon from "../components/ui/MaterialIcon";
-import { ROOMMATES, type RoommateProfile } from "../lib/mockData";
+import { api } from "../lib/api";
+import type { RoommateProfile } from "../lib/types";
 
 type PageProps = { onNavigate: (page: string) => void };
 
-// ─── Filters ──────────────────────────────────────────────────────────────────
 type Filters = {
   gender: "all" | "male" | "female";
   schedule: "all" | "early_bird" | "night_owl" | "flexible";
@@ -26,44 +26,44 @@ const DEFAULT_FILTERS: Filters = {
 
 const CITIES = ["all", "Bangalore", "Mumbai", "Hyderabad", "Delhi", "Pune", "Chennai", "Kolkata", "Ahmedabad", "Noida"];
 
-// ─── Profile card ─────────────────────────────────────────────────────────────
 function ProfileCard({ profile, onClick }: { profile: RoommateProfile; onClick: () => void }) {
   return (
     <article
       onClick={onClick}
       className="group relative cursor-pointer overflow-hidden rounded-2xl bg-surface-container-lowest shadow-ambient transition-all hover:-translate-y-1 hover:shadow-lg active:scale-95"
     >
-      {/* Avatar */}
       <div className="relative h-52 overflow-hidden bg-gradient-to-br from-primary/10 to-secondary/10">
-        <img src={profile.avatar} alt={profile.name} className="h-full w-full object-cover" />
-        {/* Compatibility badge */}
+        {profile.avatar ? (
+          <img src={profile.avatar} alt={profile.name} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-primary/10">
+            <MaterialIcon name="person" className="text-6xl text-primary/40" />
+          </div>
+        )}
         <span className={`absolute right-3 top-3 rounded-full px-2.5 py-1 text-xs font-black shadow ${profile.compatibility >= 90 ? "bg-secondary text-white" : "bg-secondary-fixed text-on-secondary-fixed"}`}>
           {profile.compatibility}%
         </span>
-        {/* Online dot placeholder */}
-        {profile.lifestyle.smoking === false && (
+        {!profile.lifestyle.smoking && (
           <span className="absolute bottom-3 left-3 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">Non-smoker</span>
         )}
       </div>
 
-      {/* Info */}
       <div className="p-4">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <h3 className="truncate font-headline font-bold text-on-surface group-hover:text-primary">
               {profile.name}, {profile.age}
             </h3>
-            <p className="truncate text-xs text-primary">{profile.occupation}</p>
+            <p className="truncate text-xs text-primary">{profile.occupation || "—"}</p>
             <p className="mt-0.5 flex items-center gap-0.5 text-xs text-on-surface-variant">
-              <MaterialIcon name="location_on" className="text-[11px]" />{profile.city}
+              <MaterialIcon name="location_on" className="text-[11px]" />{profile.city || "—"}
             </p>
           </div>
           <p className="shrink-0 font-headline text-sm font-black text-on-surface">
-            ₹{(profile.budget / 1000).toFixed(0)}k<span className="text-[10px] font-semibold text-outline">/mo</span>
+            {profile.budget > 0 ? <>₹{(profile.budget / 1000).toFixed(0)}k<span className="text-[10px] font-semibold text-outline">/mo</span></> : "—"}
           </p>
         </div>
 
-        {/* Lifestyle icons */}
         <div className="mt-3 flex flex-wrap gap-1.5">
           {profile.preferences.slice(0, 3).map((pref) => (
             <span key={pref} className="rounded-full bg-surface-container-high px-2.5 py-0.5 text-[10px] font-semibold text-on-surface-variant">
@@ -81,19 +81,28 @@ function ProfileCard({ profile, onClick }: { profile: RoommateProfile; onClick: 
   );
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
 export default function RoommateFinder({ onNavigate }: PageProps) {
+  const [profiles, setProfiles] = useState<RoommateProfile[]>([]);
+  const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
+
+  useEffect(() => {
+    api
+      .searchUsers({ filters: {}, pagination: { page: 1, limit: 50 }, sort: { by: "compatibility", order: "desc" } })
+      .then((res) => setProfiles(res.data ?? []))
+      .catch(() => setProfiles([]))
+      .finally(() => setLoading(false));
+  }, []);
 
   const setF = <K extends keyof Filters>(key: K, val: Filters[K]) =>
     setFilters((prev) => ({ ...prev, [key]: val }));
 
-  const filtered = ROOMMATES.filter((p) => {
+  const filtered = profiles.filter((p) => {
     if (filters.gender !== "all" && p.gender !== filters.gender) return false;
     if (filters.schedule !== "all" && p.lifestyle.schedule !== filters.schedule) return false;
-    if (p.budget > filters.maxBudget) return false;
-    if (filters.city !== "all" && p.city !== filters.city) return false;
+    if (filters.maxBudget < 30000 && p.budget > filters.maxBudget) return false;
+    if (filters.city !== "all" && !p.city.toLowerCase().includes(filters.city.toLowerCase()) && !p.lookingIn.some((loc) => loc.toLowerCase().includes(filters.city.toLowerCase()))) return false;
     if (filters.smoking === "no" && p.lifestyle.smoking) return false;
     if (filters.pets === "yes" && !p.lifestyle.pets) return false;
     return true;
@@ -101,10 +110,10 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
 
   const openRoommate = (profile: RoommateProfile) => {
     sessionStorage.setItem("homigo_selected_roommate", profile.id);
+    sessionStorage.setItem("homigo_selected_roommate_data", JSON.stringify(profile));
     onNavigate("roommate");
   };
 
-  // ── Grid view ───────────────────────────────────────────────────────────────
   return (
     <div className="flex min-h-screen flex-col bg-surface">
       <main className="mx-auto w-full max-w-7xl px-4 pb-24 pt-24 sm:px-6">
@@ -116,7 +125,7 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
               Find your ideal flatmate
             </h1>
             <p className="mt-1 text-on-surface-variant">
-              {filtered.length} profile{filtered.length !== 1 ? "s" : ""} across top Indian cities
+              {loading ? "Loading profiles…" : `${filtered.length} profile${filtered.length !== 1 ? "s" : ""} found`}
             </p>
           </div>
           <button
@@ -135,7 +144,6 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
         {showFilters && (
           <div className="mb-6 rounded-2xl border border-surface-container bg-surface-container-lowest p-5 shadow-sm">
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-6">
-              {/* City */}
               <label className="col-span-2 space-y-1 sm:col-span-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-outline">City</span>
                 <select value={filters.city} onChange={(e) => setF("city", e.target.value)} className="text-sm">
@@ -143,7 +151,6 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
                 </select>
               </label>
 
-              {/* Gender */}
               <label className="space-y-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-outline">Gender</span>
                 <select value={filters.gender} onChange={(e) => setF("gender", e.target.value as Filters["gender"])} className="text-sm">
@@ -153,7 +160,6 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
                 </select>
               </label>
 
-              {/* Schedule */}
               <label className="space-y-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-outline">Schedule</span>
                 <select value={filters.schedule} onChange={(e) => setF("schedule", e.target.value as Filters["schedule"])} className="text-sm">
@@ -164,7 +170,6 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
                 </select>
               </label>
 
-              {/* Budget */}
               <label className="col-span-2 space-y-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-outline">
                   Max Budget: <span className="text-primary">₹{filters.maxBudget.toLocaleString("en-IN")}</span>
@@ -180,7 +185,6 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
                 </div>
               </label>
 
-              {/* Toggles */}
               <div className="flex flex-col gap-2">
                 <button
                   onClick={() => setF("smoking", filters.smoking === "all" ? "no" : "all")}
@@ -219,8 +223,13 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
           ))}
         </div>
 
-        {/* Cards grid */}
-        {filtered.length === 0 ? (
+        {/* Grid / loading / empty states */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center text-on-surface-variant">
+            <MaterialIcon name="sync" className="animate-spin text-5xl text-primary" />
+            <p className="mt-4 text-sm font-semibold">Loading roommate profiles…</p>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center text-on-surface-variant">
             <MaterialIcon name="person_search" className="text-5xl text-outline" />
             <p className="mt-4 font-headline text-xl font-bold">No profiles match your filters</p>

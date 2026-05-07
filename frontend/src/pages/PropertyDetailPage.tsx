@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import MaterialIcon from "../components/ui/MaterialIcon";
 import ProfileGate from "../components/ui/ProfileGate";
 import { api } from "../lib/api";
+import { useHomigoAuth } from "../components/auth/AuthContext";
 
 type PageProps = { onNavigate: (page: string) => void };
 
@@ -65,19 +66,52 @@ type PropertyDetail = {
 
 export default function PropertyDetailPage({ onNavigate }: PageProps) {
   const propertyId = sessionStorage.getItem("homigo_selected_property");
+  const { userId } = useHomigoAuth();
 
   const [property, setProperty] = useState<PropertyDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeImg, setActiveImg] = useState(0);
   const [saved, setSaved] = useState(false);
+  const [savedItemId, setSavedItemId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!propertyId) { setLoading(false); return; }
-    api.getPropertyDetails(propertyId)
-      .then((res) => setProperty((res as any).data as PropertyDetail))
+    Promise.all([
+      api.getPropertyDetails(propertyId),
+      api.getSavedItems(userId).catch(() => ({ data: [] })),
+    ])
+      .then(([propRes, savedRes]) => {
+        setProperty((propRes as any).data as PropertyDetail);
+        const numId = Number(propertyId);
+        const match = (savedRes as any).data?.find(
+          (item: any) => item.item_type === "property" && item.property_id === numId
+        );
+        if (match) { setSaved(true); setSavedItemId(match.id); }
+      })
       .catch(() => setProperty(null))
       .finally(() => setLoading(false));
-  }, [propertyId]);
+  }, [propertyId, userId]);
+
+  const handleToggleSave = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      if (saved && savedItemId != null) {
+        await api.removeSavedItem(userId, savedItemId);
+        setSaved(false);
+        setSavedItemId(null);
+      } else {
+        const res = await api.addSavedItem(userId, { item_type: "property", property_id: Number(propertyId) });
+        setSaved(true);
+        setSavedItemId((res as any).data?.id ?? null);
+      }
+    } catch {
+      // silently ignore — UI state unchanged
+    } finally {
+      setSaving(false);
+    }
+  }, [saved, savedItemId, saving, userId, propertyId]);
 
   if (loading) {
     return (
@@ -167,8 +201,9 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
 
               {/* Save button */}
               <button
-                onClick={() => setSaved((v) => !v)}
-                className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 shadow backdrop-blur-sm hover:bg-white"
+                onClick={handleToggleSave}
+                disabled={saving}
+                className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 shadow backdrop-blur-sm hover:bg-white disabled:opacity-60"
                 aria-label="Save listing"
               >
                 <MaterialIcon
@@ -365,6 +400,20 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
               </div>
             </ProfileGate>
 
+            {/* Add to Interests */}
+            <button
+              onClick={handleToggleSave}
+              disabled={saving}
+              className={`flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold transition disabled:opacity-60 ${
+                saved
+                  ? "border border-red-200 bg-red-50 text-red-500"
+                  : "border border-primary/20 bg-primary/10 text-primary hover:bg-primary/20"
+              }`}
+            >
+              <MaterialIcon name="favorite" className="text-sm" fill={saved} />
+              {saved ? "Saved to my Interests" : "Add to my Interests"}
+            </button>
+
             {/* Quick info card */}
             <div className="rounded-2xl border border-surface-container bg-surface-container-lowest p-5">
               <p className="mb-4 text-xs font-bold uppercase tracking-widest text-outline">Quick Info</p>
@@ -401,8 +450,9 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={() => setSaved((v) => !v)}
-              className={`flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold transition ${saved ? "bg-red-50 text-red-500" : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"}`}
+              onClick={handleToggleSave}
+              disabled={saving}
+              className={`flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold transition disabled:opacity-60 ${saved ? "bg-red-50 text-red-500" : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"}`}
             >
               <MaterialIcon name="favorite" className="text-sm" fill={saved} />
               {saved ? "Saved" : "Save"}
