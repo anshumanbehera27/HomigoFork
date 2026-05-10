@@ -677,7 +677,7 @@ export function createDomainRouter() {
   router.post("/conversations/:conversationId/messages", async (req, res) => {
     req.params.conversationId = req.params.conversationId;
     return postMessageToConversation(req, res);
-  });
+    });
 
   return router;
 }
