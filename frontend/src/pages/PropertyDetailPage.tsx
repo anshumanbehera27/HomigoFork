@@ -117,6 +117,8 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
   const openPropertyChat = useCallback(() => {
     const pid = property?.property_id ?? Number(propertyId);
     if (!Number.isFinite(pid)) return;
+    // Desired: redirect to Messages and open the owner's chat immediately.
+    // Messages.tsx will consume this intent, create/get the conversation, and open it.
     queueOpenChatIntent({ v: 1, kind: "property", propertyId: pid });
     onNavigate("messages");
   }, [property?.property_id, propertyId, onNavigate]);

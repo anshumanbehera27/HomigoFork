@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import BottomNavBar from "../components/layout/BottomNavBar";
 import MaterialIcon from "../components/ui/MaterialIcon";
+import { useHomigoAuth } from "../components/auth/AuthContext";
 import { api } from "../lib/api";
 import type { RoommateProfile } from "../lib/types";
 
@@ -86,6 +87,39 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
+  const { userId } = useHomigoAuth();
+  const [myIds, setMyIds] = useState<{ publicId: string | null; numericId: number | null }>({
+    publicId: null,
+    numericId: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!userId) {
+      setMyIds({ publicId: null, numericId: null });
+      return;
+    }
+
+    // `RoommateProfile.id` may be a Clerk id OR numeric Supabase id (as string).
+    // Resolve both for the current user so we can always filter ourselves out.
+    api
+      .getUserDetails(userId)
+      .then((res: any) => {
+        const d = res?.data ?? res;
+        const publicId = d?.user_id != null ? String(d.user_id) : null;
+        const numericId = d?.numeric_user_id != null && Number.isFinite(Number(d.numeric_user_id)) ? Number(d.numeric_user_id) : null;
+        if (!cancelled) setMyIds({ publicId, numericId });
+      })
+      .catch(() => {
+        // Fallback: at least try filtering by whatever is in auth context
+        const numeric = Number(userId);
+        setMyIds({ publicId: String(userId), numericId: Number.isFinite(numeric) ? numeric : null });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   useEffect(() => {
     api
@@ -98,7 +132,15 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
   const setF = <K extends keyof Filters>(key: K, val: Filters[K]) =>
     setFilters((prev) => ({ ...prev, [key]: val }));
 
-  const filtered = profiles.filter((p) => {
+  const filtered = useMemo(() => profiles.filter((p) => {
+    // Hide current logged-in user from roommate showcase (supports Clerk id + numeric id)
+    const pidStr = String(p.id);
+    if (myIds.publicId && pidStr === myIds.publicId) return false;
+    if (String(userId) && pidStr === String(userId)) return false;
+
+    const pidNum = Number(p.id);
+    if (Number.isFinite(pidNum) && myIds.numericId != null && pidNum === myIds.numericId) return false;
+
     if (filters.gender !== "all" && p.gender !== filters.gender) return false;
     if (filters.schedule !== "all" && p.lifestyle.schedule !== filters.schedule) return false;
     if (filters.maxBudget < 30000 && p.budget > filters.maxBudget) return false;
@@ -106,7 +148,7 @@ export default function RoommateFinder({ onNavigate }: PageProps) {
     if (filters.smoking === "no" && p.lifestyle.smoking) return false;
     if (filters.pets === "yes" && !p.lifestyle.pets) return false;
     return true;
-  });
+  }), [profiles, filters, userId, myIds.numericId, myIds.publicId]);
 
   const openRoommate = (profile: RoommateProfile) => {
     sessionStorage.setItem("homigo_selected_roommate", profile.id);

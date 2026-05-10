@@ -1,7 +1,67 @@
 import MaterialIcon from "../components/ui/MaterialIcon";
 import { useHomigoAuth } from "../components/auth/AuthContext";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../lib/api";
 
 type PageProps = { onNavigate: (page: string) => void };
+
+type BackendFullUserProfile = {
+  user_id: string;
+  numeric_user_id: number;
+  basic_info: {
+    full_name: string | null;
+    email: string;
+    phone: string | null;
+    role: string | null;
+    profile_photo: string | null;
+    is_verified: boolean | null;
+  };
+  seeker_profile:
+    | null
+    | {
+        gender: string | null;
+        age: number | null;
+        occupation: string | null;
+        bio: string | null;
+        preferred_locations: Array<{ location_name?: string | null }>;
+        lifestyle_preferences: {
+          smoking?: unknown;
+          drinking?: unknown;
+          sleep_schedule?: unknown;
+          cleanliness?: unknown;
+        };
+        roommate_preferences: {
+          preferred_gender?: string | null;
+          age_range?: { min?: number | null; max?: number | null };
+          pet_friendly?: boolean | null;
+          additional_notes?: string | null;
+        };
+      };
+  owner_profile:
+    | null
+    | {
+        business_name: string | null;
+        kyc_status: string | null;
+        rating: number | null;
+        total_properties: number | null;
+        is_verified: boolean | null;
+        bio: string | null;
+      };
+  current_room_details:
+    | null
+    | {
+        location?: string | null;
+        rent?: number | null;
+      };
+  stats?: {
+    profile_completion?: number | null;
+    total_matches?: number | null;
+    active_chats?: number | null;
+  };
+  timestamps?: {
+    created_at?: string | null;
+  };
+};
 
 // ── Dummy user data ────────────────────────────────────────────────────────────
 const DUMMY_USER = {
@@ -103,6 +163,51 @@ const LIFESTYLE_ITEMS = (s: typeof DUMMY_USER.seeker.lifestyle) => [
   { icon: "restaurant",                                    label: "Cooking",   value: s.cooking   ? "Home cook"    : "Eats out",      ok: true         },
 ];
 
+function formatMemberSince(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+function normalizeRole(role: unknown): "seeker" | "owner" | "both" | null {
+  const v = String(role ?? "").toLowerCase();
+  if (v === "seeker" || v === "owner" || v === "both") return v;
+  return null;
+}
+
+function formatGender(gender: unknown): string | null {
+  const v = String(gender ?? "").toLowerCase();
+  if (!v) return null;
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+function yesNoToBool(value: unknown): boolean | null {
+  const v = String(value ?? "").toLowerCase();
+  if (!v) return null;
+  if (v === "true" || v === "yes" || v === "y" || v === "1" || v === "occasionally") return true;
+  if (v === "false" || v === "no" || v === "n" || v === "0") return false;
+  return null;
+}
+
+function formatSchedule(value: unknown): string | null {
+  const v = String(value ?? "").toLowerCase();
+  if (!v) return null;
+  if (v === "early_bird") return "Early Bird";
+  if (v === "night_owl") return "Night Owl";
+  if (v === "flexible") return "Flexible";
+  return v;
+}
+
+function formatCleanliness(value: unknown): string | null {
+  const v = String(value ?? "").toLowerCase();
+  if (!v) return null;
+  if (v === "high" || v === "very_tidy") return "Very Tidy";
+  if (v === "medium") return "Moderately tidy";
+  if (v === "relaxed" || v === "low") return "Relaxed";
+  return v;
+}
+
 // ── Property card (owner listings) ────────────────────────────────────────────
 function PropertyCard({
   p,
@@ -191,16 +296,131 @@ function PropertyCard({
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function UserProfile({ onNavigate }: PageProps) {
-  const { userProfile } = useHomigoAuth();
+  const { userProfile, userId, authReady } = useHomigoAuth();
+  const [backendProfile, setBackendProfile] = useState<BackendFullUserProfile | null>(null);
+
+  useEffect(() => {
+    if (!authReady) return;
+    if (userId == null || userId === "") {
+      setBackendProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    api
+      .getUserDetails(userId)
+      .then((res: any) => {
+        const payload = (res?.data ?? null) as BackendFullUserProfile | null;
+        if (!cancelled) setBackendProfile(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendProfile(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, userId]);
+
+  const merged = useMemo(() => {
+    const role = normalizeRole(backendProfile?.basic_info?.role) ?? DUMMY_USER.role;
+    const is_verified = backendProfile?.basic_info?.is_verified;
+    const verified = typeof is_verified === "boolean" ? is_verified : DUMMY_USER.verified;
+
+    const memberSince =
+      formatMemberSince(backendProfile?.timestamps?.created_at) ?? DUMMY_USER.memberSince;
+
+    const preferredLocationsFromApi =
+      backendProfile?.seeker_profile?.preferred_locations
+        ?.map((l) => String(l?.location_name ?? "").trim())
+        .filter(Boolean) ?? [];
+
+    const location =
+      backendProfile?.current_room_details?.location ??
+      preferredLocationsFromApi[0] ??
+      DUMMY_USER.location;
+
+    const budgetFromApi = backendProfile?.current_room_details?.rent;
+    const budget = typeof budgetFromApi === "number" && Number.isFinite(budgetFromApi) ? budgetFromApi : DUMMY_USER.seeker.budget;
+
+    const smoking = yesNoToBool(backendProfile?.seeker_profile?.lifestyle_preferences?.smoking);
+    const drinking = yesNoToBool(backendProfile?.seeker_profile?.lifestyle_preferences?.drinking);
+    const sleepSchedule = formatSchedule(backendProfile?.seeker_profile?.lifestyle_preferences?.sleep_schedule);
+    const cleanliness = formatCleanliness(backendProfile?.seeker_profile?.lifestyle_preferences?.cleanliness);
+
+    const seeker = {
+      ...DUMMY_USER.seeker,
+      age: backendProfile?.seeker_profile?.age ?? DUMMY_USER.seeker.age,
+      gender: formatGender(backendProfile?.seeker_profile?.gender) ?? DUMMY_USER.seeker.gender,
+      budget,
+      preferredLocations: preferredLocationsFromApi.length ? preferredLocationsFromApi : DUMMY_USER.seeker.preferredLocations,
+      lifestyle: {
+        ...DUMMY_USER.seeker.lifestyle,
+        smoking: smoking ?? DUMMY_USER.seeker.lifestyle.smoking,
+        drinking: drinking ?? DUMMY_USER.seeker.lifestyle.drinking,
+        sleepSchedule: sleepSchedule ?? DUMMY_USER.seeker.lifestyle.sleepSchedule,
+        cleanliness: cleanliness ?? DUMMY_USER.seeker.lifestyle.cleanliness,
+      },
+      preferences: {
+        ...DUMMY_USER.seeker.preferences,
+        preferredGender:
+          (backendProfile?.seeker_profile?.roommate_preferences?.preferred_gender
+            ? String(backendProfile.seeker_profile.roommate_preferences.preferred_gender)
+            : null) ?? DUMMY_USER.seeker.preferences.preferredGender,
+        ageRange: {
+          min:
+            backendProfile?.seeker_profile?.roommate_preferences?.age_range?.min ??
+            DUMMY_USER.seeker.preferences.ageRange.min,
+          max:
+            backendProfile?.seeker_profile?.roommate_preferences?.age_range?.max ??
+            DUMMY_USER.seeker.preferences.ageRange.max,
+        },
+        notes:
+          backendProfile?.seeker_profile?.roommate_preferences?.additional_notes ??
+          DUMMY_USER.seeker.preferences.notes,
+      },
+    };
+
+    const owner = {
+      ...DUMMY_USER.owner,
+      businessName: backendProfile?.owner_profile?.business_name ?? DUMMY_USER.owner.businessName,
+      kyc: backendProfile?.owner_profile?.kyc_status ?? DUMMY_USER.owner.kyc,
+      rating: backendProfile?.owner_profile?.rating ?? DUMMY_USER.owner.rating,
+      totalProperties: backendProfile?.owner_profile?.total_properties ?? DUMMY_USER.owner.totalProperties,
+    };
+
+    const stats = {
+      ...DUMMY_USER.stats,
+      matches: backendProfile?.stats?.total_matches ?? DUMMY_USER.stats.matches,
+      activeChats: backendProfile?.stats?.active_chats ?? DUMMY_USER.stats.activeChats,
+      profileCompletion: backendProfile?.stats?.profile_completion ?? DUMMY_USER.stats.profileCompletion,
+    };
+
+    const occupation = backendProfile?.seeker_profile?.occupation ?? DUMMY_USER.occupation;
+    const bio = backendProfile?.seeker_profile?.bio ?? backendProfile?.owner_profile?.bio ?? DUMMY_USER.bio;
+
+    return {
+      role,
+      verified,
+      memberSince,
+      location,
+      occupation,
+      bio,
+      seeker,
+      owner,
+      stats,
+      properties: DUMMY_USER.properties,
+      company: DUMMY_USER.company,
+    };
+  }, [backendProfile]);
 
   // Auth data takes priority; DUMMY fills every field not yet returned from the backend
-  const name     = userProfile?.fullName  ?? DUMMY_USER.name;
-  const avatar   = userProfile?.imageUrl  ?? DUMMY_USER.avatar;
-  const email    = userProfile?.email     ?? DUMMY_USER.email;
-  const phone    = userProfile?.phone     ?? DUMMY_USER.phone;
+  const name = backendProfile?.basic_info?.full_name ?? userProfile?.fullName ?? DUMMY_USER.name;
+  const avatar = backendProfile?.basic_info?.profile_photo ?? userProfile?.imageUrl ?? DUMMY_USER.avatar;
+  const email = backendProfile?.basic_info?.email ?? userProfile?.email ?? DUMMY_USER.email;
+  const phone = backendProfile?.basic_info?.phone ?? userProfile?.phone ?? DUMMY_USER.phone;
 
-  const { location, occupation, company, bio,
-          verified, memberSince, stats, seeker, owner, properties, role } = DUMMY_USER;
+  const { location, occupation, company, bio, verified, memberSince, stats, seeker, owner, properties, role } = merged;
 
   const isOwner  = role === "owner"  || role === "both";
   const isSeeker = role === "seeker" || role === "both";
