@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import MaterialIcon from "../components/ui/MaterialIcon";
 import ProfileGate from "../components/ui/ProfileGate";
 import { api } from "../lib/api";
+import { queueOpenChatIntent } from "../lib/chatIntent";
 import type { RoommateProfile } from "../lib/types";
 
 type PageProps = { onNavigate: (page: string) => void };
@@ -130,6 +131,12 @@ export default function RoommateDetailPage({ onNavigate }: PageProps) {
       .catch(() => { /* keep cached profile if fetch fails */ })
       .finally(() => setLoading(false));
   }, []);
+
+  const openRoommateChat = useCallback(() => {
+    if (!profile) return;
+    queueOpenChatIntent({ v: 1, kind: "user", targetUserId: profile.id });
+    onNavigate("messages");
+  }, [profile, onNavigate]);
 
   if (loading) {
     return (
@@ -473,7 +480,7 @@ export default function RoommateDetailPage({ onNavigate }: PageProps) {
                   Send a message to connect with {profile.name.split(" ")[0]}.
                 </p>
                 <button
-                  onClick={() => onNavigate("messages")}
+                  onClick={openRoommateChat}
                   className="btn-primary w-full flex items-center justify-center gap-2"
                 >
                   <MaterialIcon name="chat" className="text-sm" /> Send Message
@@ -516,7 +523,7 @@ export default function RoommateDetailPage({ onNavigate }: PageProps) {
             </button>
             <ProfileGate action="message this roommate" onNavigate={onNavigate}>
               <button
-                onClick={() => onNavigate("messages")}
+                onClick={openRoommateChat}
                 className="btn-primary flex items-center gap-2 text-sm"
               >
                 <MaterialIcon name="chat" className="text-sm" /> Message

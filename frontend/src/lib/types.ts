@@ -73,6 +73,55 @@ export type Conversation = {
   status?: string | null;
 };
 
+/** Raw row from `conversations` (chat controller create/get responses). */
+export type ConversationRecord = {
+  conversation_id: number;
+  user1_id: number;
+  user2_id: number;
+  property_id?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+/** Enriched conversation row returned by GET /conversations?user_id= */
+export type EnrichedConversation = {
+  conversation_id: number;
+  created_at: string;
+  updated_at: string;
+  property_id: number | null;
+  other_user_id: number;
+  other_user_name: string | null;
+  other_user_photo: string | null;
+  other_user_role: string | null;
+  last_message_id: number | null;
+  last_message_content: string | null;
+  last_message_sender_id: number | null;
+  last_message_at: string | null;
+  unread_count: number;
+};
+
+/** Message row returned by GET /conversations/:id/messages */
+export type BackendMessage = {
+  message_id: number;
+  conversation_id: number;
+  sender_id: number;
+  receiver_id: number;
+  content: string;
+  message_type: string;
+  read: boolean;
+  timestamp: string;
+};
+
+export type PaginatedResponse<T> = {
+  success: boolean;
+  data: T[];
+  pagination: {
+    limit: number;
+    next_cursor: number | null;
+    has_more: boolean;
+  };
+};
+
 export type Message = {
   message_id: number;
   conversation_id: number;

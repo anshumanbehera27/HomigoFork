@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import MaterialIcon from "../components/ui/MaterialIcon";
 import ProfileGate from "../components/ui/ProfileGate";
 import { api } from "../lib/api";
+import { queueOpenChatIntent } from "../lib/chatIntent";
 import { useHomigoAuth } from "../components/auth/AuthContext";
 
 type PageProps = { onNavigate: (page: string) => void };
@@ -112,6 +113,13 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
       setSaving(false);
     }
   }, [saved, savedItemId, saving, userId, propertyId]);
+
+  const openPropertyChat = useCallback(() => {
+    const pid = property?.property_id ?? Number(propertyId);
+    if (!Number.isFinite(pid)) return;
+    queueOpenChatIntent({ v: 1, kind: "property", propertyId: pid });
+    onNavigate("messages");
+  }, [property?.property_id, propertyId, onNavigate]);
 
   if (loading) {
     return (
@@ -392,7 +400,7 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
                   )}
                 </div>
                 <button
-                  onClick={() => onNavigate("messages")}
+                  onClick={openPropertyChat}
                   className="btn-primary mt-5 w-full flex items-center justify-center gap-2 text-sm"
                 >
                   <MaterialIcon name="chat" className="text-sm" /> Message owner
@@ -459,7 +467,7 @@ export default function PropertyDetailPage({ onNavigate }: PageProps) {
             </button>
             <ProfileGate action="send an inquiry" onNavigate={onNavigate}>
               <button
-                onClick={() => onNavigate("messages")}
+                onClick={openPropertyChat}
                 className="btn-primary flex items-center gap-2 text-sm"
               >
                 <MaterialIcon name="send" className="text-sm" /> Send Inquiry

@@ -88,3 +88,86 @@ BEGIN
       CHECK ((chat_id IS NOT NULL) <> (conversation_id IS NOT NULL));
   END IF;
 END $$;
+
+-- =========================
+-- MESSAGING ENHANCEMENTS
+-- =========================
+
+-- Store which property prompted a seeker→owner conversation
+ALTER TABLE conversations
+  ADD COLUMN IF NOT EXISTS property_id INT REFERENCES properties(property_id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_conversations_property
+  ON conversations (property_id)
+  WHERE property_id IS NOT NULL;
+
+-- Fast partial index for unread-count scans
+CREATE INDEX IF NOT EXISTS idx_messages_receiver_unread
+  ON messages (receiver_id, read)
+  WHERE read = FALSE;
+
+-- Enriched conversation list RPC: returns one row per conversation the requesting user
+-- is in, with the other participant's info, last message preview, and per-conversation
+-- unread count — all in a single round-trip.
+CREATE OR REPLACE FUNCTION get_conversations_for_user(requesting_user_id INT)
+RETURNS TABLE (
+  conversation_id        INT,
+  created_at             TIMESTAMP,
+  updated_at             TIMESTAMP,
+  property_id            INT,
+  other_user_id          INT,
+  other_user_name        VARCHAR,
+  other_user_photo       TEXT,
+  other_user_role        TEXT,
+  last_message_id        INT,
+  last_message_content   TEXT,
+  last_message_sender_id INT,
+  last_message_at        TIMESTAMP,
+  unread_count           BIGINT
+)
+LANGUAGE sql STABLE AS $$
+  SELECT
+    c.conversation_id,
+    c.created_at,
+    c.updated_at,
+    c.property_id,
+    CASE WHEN c.user1_id = requesting_user_id THEN c.user2_id ELSE c.user1_id END AS other_user_id,
+    u.full_name                                                                    AS other_user_name,
+    pm.url                                                                         AS other_user_photo,
+    CAST(u.role AS TEXT)                                                           AS other_user_role,
+    lm.message_id                                                                  AS last_message_id,
+    lm.content                                                                     AS last_message_content,
+    lm.sender_id                                                                   AS last_message_sender_id,
+    lm.timestamp                                                                   AS last_message_at,
+    COALESCE(uc.unread_count, 0)                                                   AS unread_count
+  FROM conversations c
+  JOIN users u
+    ON u.user_id = CASE WHEN c.user1_id = requesting_user_id THEN c.user2_id ELSE c.user1_id END
+  LEFT JOIN media pm ON pm.media_id = u.profile_photo_id
+  LEFT JOIN LATERAL (
+    SELECT m.message_id, m.content, m.sender_id, m.timestamp
+    FROM   messages m
+    WHERE  m.conversation_id = c.conversation_id
+    ORDER  BY m.timestamp DESC
+    LIMIT  1
+  ) lm ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS unread_count
+    FROM   messages m2
+    WHERE  m2.conversation_id = c.conversation_id
+      AND  m2.receiver_id     = requesting_user_id
+      AND  m2.read            = FALSE
+  ) uc ON TRUE
+  WHERE c.user1_id = requesting_user_id OR c.user2_id = requesting_user_id
+  ORDER BY c.updated_at DESC;
+$$;
+
+-- Total unread count across all conversations (notification badge endpoint)
+CREATE OR REPLACE FUNCTION get_unread_message_count(requesting_user_id INT)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+  SELECT COUNT(*)
+  FROM   messages
+  WHERE  receiver_id     = requesting_user_id
+    AND  read            = FALSE
+    AND  conversation_id IS NOT NULL;
+$$;

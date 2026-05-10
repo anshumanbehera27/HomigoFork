@@ -15,6 +15,27 @@ type AuthBridgeProps = {
 
 const PUBLIC_PAGES = new Set(["landing", "login"]);
 
+/** After refresh, Clerk rehydrates and this effect runs again — do not overwrite `#/messages` (etc.) with dashboard. */
+const PRESERVE_ROUTE_ON_SESSION_HYDRATION = new Set([
+  "dashboard",
+  "messages",
+  "profile",
+  "roommates",
+  "roommate",
+  "accommodation",
+  "property",
+  "role",
+  "onboarding1",
+  "onboarding2",
+  "onboarding3",
+  "onboarding4",
+  "owner1",
+  "owner2",
+  "owner3",
+  "owner4",
+  "owner5",
+]);
+
 export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileChange, onAuthReady, currentPage }: AuthBridgeProps) {
   const { getToken, isSignedIn } = useAuth();
   const { user, isLoaded } = useUser();
@@ -76,6 +97,8 @@ export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileCh
       // Don't redirect away from public pages (e.g. landing) on auto sign-in
       if (PUBLIC_PAGES.has(currentPage)) return;
 
+      const preserveRoute = PRESERVE_ROUTE_ON_SESSION_HYDRATION.has(currentPage);
+
       // Determine destination: returning users (role set) → dashboard; new users → role selection
       try {
         const result = await api.getUserDetails(resolvedUserId) as any;
@@ -87,12 +110,16 @@ export default function AuthBridge({ onNavigate, onUserIdChange, onUserProfileCh
         const role = result?.data?.basic_info?.role;
         if (role === "seeker" || role === "owner") {
           markOnboardingComplete(role);
+        }
+        if (preserveRoute) return;
+
+        if (role === "seeker" || role === "owner") {
           onNavigate("dashboard");
         } else {
           onNavigate("role");
         }
       } catch {
-        // User not found in DB or network error → treat as new user
+        if (preserveRoute) return;
         onNavigate("role");
       }
     })();

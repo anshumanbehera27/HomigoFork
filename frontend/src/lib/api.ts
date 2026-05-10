@@ -1,4 +1,16 @@
-import type { ApiListResponse, ApiSingleResponse, Conversation, DashboardData, Message, Property, PropertySearchResult, RoommateMatch, RoommateProfile } from "./types";
+import type {
+  ApiListResponse,
+  ApiSingleResponse,
+  BackendMessage,
+  ConversationRecord,
+  DashboardData,
+  EnrichedConversation,
+  PaginatedResponse,
+  Property,
+  PropertySearchResult,
+  RoommateMatch,
+  RoommateProfile,
+} from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000/api";
 let authTokenGetter: (() => Promise<string | null>) | null = null;
@@ -117,18 +129,61 @@ export const api = {
   },
 
   listConversations(userId: string | number) {
-    return request<ApiListResponse<Conversation>>(`/conversations?sender_id=${userId}`);
+    return request<{ success: boolean; data: EnrichedConversation[] }>(`/conversations?user_id=${encodeURIComponent(String(userId))}`);
   },
 
-  getMessages(conversationId: number) {
-    return request<ApiListResponse<Message>>(`/conversations/${conversationId}/messages`);
+  /** Viewer starts or resumes chat with the property owner (POST /properties/:id/conversations). */
+  createConversationForProperty(propertyId: number, viewerUserId: string | number) {
+    return request<{
+      success: boolean;
+      data: {
+        conversation: ConversationRecord;
+        property_id: number;
+        user_id: number;
+        owner_user_id: number;
+      };
+      existing: boolean;
+    }>(`/properties/${propertyId}/conversations`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: viewerUserId }),
+    });
   },
 
-  sendMessage(conversationId: number, payload: Pick<Message, "sender_id" | "body">) {
-    return request<ApiSingleResponse<Message>>(`/conversations/${conversationId}/messages`, {
+  /** Viewer starts or resumes DM with another user (POST /users/:id/conversations). */
+  createConversationForUser(targetUserId: string | number, viewerUserId: string | number) {
+    return request<{ success: boolean; data: ConversationRecord; existing: boolean }>(
+      `/users/${encodeURIComponent(String(targetUserId))}/conversations`,
+      {
+        method: "POST",
+        body: JSON.stringify({ user_id: viewerUserId }),
+      },
+    );
+  },
+
+  getMessages(conversationId: number, beforeId?: number, limit = 50) {
+    const qs = new URLSearchParams();
+    if (beforeId != null) qs.set("before_id", String(beforeId));
+    qs.set("limit", String(limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<PaginatedResponse<BackendMessage>>(`/conversations/${conversationId}/messages${suffix}`);
+  },
+
+  sendMessage(conversationId: number, payload: { sender_id: number; receiver_id: number; message: string }) {
+    return request<ApiSingleResponse<BackendMessage>>(`/conversations/${conversationId}/messages`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+
+  markConversationRead(conversationId: number, userId: number) {
+    return request<{ success: boolean; updated_count: number }>(`/conversations/${conversationId}/read`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    });
+  },
+
+  getUnreadCount(userId: string | number) {
+    return request<{ success: boolean; unread_count: number }>(`/users/${userId}/unread-count`);
   },
 
   createConversation(payload: { sender_id: string | number; receiver_id: string | number; context: { type: "property" | "roommate"; context_id: string | number }; message: string }) {

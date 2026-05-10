@@ -37,7 +37,7 @@ async function findConversationBetween(userA: number, userB: number) {
   return data;
 }
 
-async function ensureConversationBetween(user1Id: number, user2Id: number) {
+async function ensureConversationBetween(user1Id: number, user2Id: number, propertyId?: number) {
   const existing = await findConversationBetween(user1Id, user2Id);
   if (existing) return { conversation: existing, existing: true as const };
 
@@ -46,6 +46,7 @@ async function ensureConversationBetween(user1Id: number, user2Id: number) {
     .insert({
       user1_id: user1Id,
       user2_id: user2Id,
+      property_id: propertyId ?? null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -104,7 +105,7 @@ export async function createOrGetConversationForProperty(req: Request, res: Resp
     const ownerUserId = await resolveOwnerUserIdByPropertyId(propertyId);
     if (viewerUserId === ownerUserId) throw new HttpError(400, "You cannot chat with yourself");
 
-    const { conversation, existing } = await ensureConversationBetween(viewerUserId, ownerUserId);
+    const { conversation, existing } = await ensureConversationBetween(viewerUserId, ownerUserId, propertyId);
     res.status(existing ? 200 : 201).json({
       success: true,
       data: {
@@ -138,6 +139,7 @@ export async function createOrGetConversationForUser(req: Request, res: Response
   }
 }
 
+/** GET /conversations?user_id= — enriched list via Supabase RPC */
 export async function listConversations(req: Request, res: Response) {
   try {
     const requestedUserId = req.query.user_id ?? req.query.sender_id;
@@ -156,6 +158,93 @@ export async function listConversations(req: Request, res: Response) {
   }
 }
 
+/** GET /conversations?user_id= — enriched list with participant info, last message, unread count */
+export async function listConversationsEnriched(req: Request, res: Response) {
+  try {
+    const requestedUserId = req.query.user_id ?? req.query.sender_id;
+    if (!requestedUserId) return res.json({ success: true, data: [] });
+    const userId = await resolveUserId(requestedUserId);
+
+    const { data, error } = await supabase.rpc("get_conversations_for_user", {
+      requesting_user_id: userId,
+    });
+    if (error) throw error;
+    res.json({ success: true, data: data ?? [] });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/** GET /conversations/:conversationId?user_id= — single conversation, participant-gated */
+export async function getConversation(req: Request, res: Response) {
+  try {
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isFinite(conversationId)) throw new HttpError(400, "Invalid conversation_id");
+
+    const requestingUserId = await resolveUserId(req.query.user_id ?? req.query.sender_id);
+
+    const { data: conversation, error } = await supabase
+      .from("conversations")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!conversation) throw new HttpError(404, "Conversation not found");
+
+    const isParticipant = conversation.user1_id === requestingUserId || conversation.user2_id === requestingUserId;
+    if (!isParticipant) throw new HttpError(403, "Not a participant of this conversation");
+
+    res.json({ success: true, data: conversation });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/** GET /conversations/:conversationId/messages?limit=50&before_id= — cursor-based pagination */
+export async function getMessagesPaginated(req: Request, res: Response) {
+  try {
+    const conversationId = Number(req.params.conversationId ?? req.params.conversation_id);
+    if (!Number.isFinite(conversationId)) throw new HttpError(400, "Invalid conversation_id");
+
+    const { data: conversation, error: convErr } = await supabase
+      .from("conversations")
+      .select("conversation_id")
+      .eq("conversation_id", conversationId)
+      .maybeSingle();
+    if (convErr) throw convErr;
+    if (!conversation) throw new HttpError(404, "Conversation not found");
+
+    const limit = Math.min(Number(req.query.limit ?? 50), 100);
+    const beforeId = req.query.before_id ? Number(req.query.before_id) : null;
+
+    let query = supabase
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("message_id", { ascending: false })
+      .limit(limit);
+
+    if (beforeId !== null && Number.isFinite(beforeId)) {
+      query = query.lt("message_id", beforeId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const messages = (data ?? []).reverse();
+    const nextCursor = messages.length === limit ? messages[0].message_id : null;
+
+    res.json({
+      success: true,
+      data: messages,
+      pagination: { limit, next_cursor: nextCursor, has_more: nextCursor !== null },
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/** GET /messages/:conversationId — kept for back-compat, full history no pagination */
 export async function getMessagesByConversation(req: Request, res: Response) {
   try {
     const conversationId = Number(req.params.conversationId ?? req.params.conversation_id);
@@ -173,6 +262,7 @@ export async function getMessagesByConversation(req: Request, res: Response) {
   }
 }
 
+/** POST /conversations/:conversationId/messages — send a message */
 export async function postMessageToConversation(req: Request, res: Response) {
   try {
     const conversationId = Number(req.params.conversationId ?? req.params.conversation_id ?? req.body?.conversation_id);
@@ -218,3 +308,49 @@ export async function postMessageToConversation(req: Request, res: Response) {
   }
 }
 
+/** POST /conversations/:conversationId/read — mark all messages as read for a user */
+export async function markMessagesRead(req: Request, res: Response) {
+  try {
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isFinite(conversationId)) throw new HttpError(400, "Invalid conversation_id");
+
+    const receiverId = await resolveUserId(req.body?.user_id ?? req.body?.reader_id);
+
+    const { data: conversation, error: convErr } = await supabase
+      .from("conversations")
+      .select("user1_id, user2_id")
+      .eq("conversation_id", conversationId)
+      .maybeSingle();
+    if (convErr) throw convErr;
+    if (!conversation) throw new HttpError(404, "Conversation not found");
+
+    const isParticipant = conversation.user1_id === receiverId || conversation.user2_id === receiverId;
+    if (!isParticipant) throw new HttpError(403, "Not a participant of this conversation");
+
+    const { error, count } = await supabase
+      .from("messages")
+      .update({ read: true }, { count: "exact" })
+      .eq("conversation_id", conversationId)
+      .eq("receiver_id", receiverId)
+      .eq("read", false);
+    if (error) throw error;
+
+    res.json({ success: true, updated_count: count ?? 0 });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+/** GET /users/:userId/unread-count — total unread messages for notification badge */
+export async function getUnreadCount(req: Request, res: Response) {
+  try {
+    const userId = await resolveUserId(req.params.userId);
+    const { data, error } = await supabase.rpc("get_unread_message_count", {
+      requesting_user_id: userId,
+    });
+    if (error) throw error;
+    res.json({ success: true, unread_count: Number(data ?? 0) });
+  } catch (error) {
+    sendError(res, error);
+  }
+}

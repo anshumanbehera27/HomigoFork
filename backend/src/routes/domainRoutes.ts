@@ -11,8 +11,12 @@ import {
   createOrGetConversation,
   createOrGetConversationForProperty,
   createOrGetConversationForUser,
+  getConversation,
   getMessagesByConversation,
-  listConversations,
+  getMessagesPaginated,
+  getUnreadCount,
+  listConversationsEnriched,
+  markMessagesRead,
   postMessageToConversation,
 } from "../controllers/chatController.js";
 import { uploadImage } from "../controllers/uploadController.js";
@@ -432,9 +436,7 @@ export function createDomainRouter() {
     }
   });
 
-  router.get("/conversations", async (req, res) => {
-    return listConversations(req, res);
-  });
+  router.get("/conversations", listConversationsEnriched);
 
   router.post("/conversations", createOrGetConversation);
 
@@ -463,6 +465,8 @@ export function createDomainRouter() {
       sendError(res, error);
     }
   });
+
+  router.get("/users/:userId/unread-count", getUnreadCount);
 
   // Start chat from User Details page
   router.post("/users/:userId/conversations", createOrGetConversationForUser);
@@ -840,15 +844,10 @@ export function createDomainRouter() {
     }
   });
 
-  router.get("/conversations/:conversationId/messages", async (req, res) => {
-    req.params.conversationId = req.params.conversationId;
-    return getMessagesByConversation(req, res);
-  });
-
-  router.post("/conversations/:conversationId/messages", async (req, res) => {
-    req.params.conversationId = req.params.conversationId;
-    return postMessageToConversation(req, res);
-  });
+  router.get("/conversations/:conversationId", getConversation);
+  router.get("/conversations/:conversationId/messages", getMessagesPaginated);
+  router.post("/conversations/:conversationId/messages", postMessageToConversation);
+  router.post("/conversations/:conversationId/read", markMessagesRead);
 
   return router;
 }

@@ -15,6 +15,14 @@ function roomForUser(userId: number) {
   return `user:${userId}`;
 }
 
+async function fetchTotalUnreadCount(userId: number): Promise<number> {
+  const { data, error } = await supabase.rpc("get_unread_message_count", {
+    requesting_user_id: userId,
+  });
+  if (error) return 0;
+  return Number(data ?? 0);
+}
+
 export function attachSocketServer(httpServer: HttpServer) {
   const io = new Server(httpServer, {
     cors: {
@@ -116,9 +124,32 @@ export function attachSocketServer(httpServer: HttpServer) {
 
         io.to(roomForUser(receiverId)).emit("receive_message", saved);
         io.to(roomForUser(senderId)).emit("receive_message", saved);
+
+        // Push updated unread badge count to receiver
+        try {
+          const unreadCount = await fetchTotalUnreadCount(receiverId);
+          io.to(roomForUser(receiverId)).emit("unread_count", { unread_count: unreadCount });
+        } catch { /* non-fatal — badge refreshes on next poll */ }
       } catch (error: any) {
         socket.emit("message_error", { code: "SEND_FAILED", message: String(error?.message ?? error) });
       }
+    });
+
+    socket.on("mark_read", async (payload) => {
+      const conversationId = Number(payload?.conversation_id);
+      if (!Number.isFinite(conversationId)) return;
+
+      await supabase
+        .from("messages")
+        .update({ read: true })
+        .eq("conversation_id", conversationId)
+        .eq("receiver_id", userId)
+        .eq("read", false);
+
+      try {
+        const count = await fetchTotalUnreadCount(userId);
+        socket.emit("unread_count", { unread_count: count });
+      } catch { /* non-fatal */ }
     });
 
     socket.on("typing", (payload) => {
