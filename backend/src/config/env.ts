@@ -24,7 +24,17 @@ const envSchema = z.object({
       process.env.VITE_CLERK_PUBLISHABLE_KEY
   ),
   CLERK_WEBHOOK_SECRET: z.string().optional(),
-  FRONTEND_ORIGIN: z.string().default("http://localhost:5173"),
+  // Accept one origin or a comma-separated allowlist.
+  // Example: http://localhost:5173,http://127.0.0.1:5173,https://your-app.vercel.app
+  FRONTEND_ORIGIN: z
+    .string()
+    .default("http://localhost:5173")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean)
+    ),
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),

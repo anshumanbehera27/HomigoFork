@@ -6,7 +6,7 @@ Express + TypeScript API layer for the Homigo Supabase database.
 
 1. Create a Supabase project.
 2. Run `supabase/schema.sql` in the Supabase SQL editor.
-3. Copy `.env.example` to `.env` and fill in:
+3. Create `backend/.env` and fill in:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `FRONTEND_ORIGIN`
